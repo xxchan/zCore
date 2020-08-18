@@ -287,11 +287,6 @@
 <span id="287">287</span>
 <span id="288">288</span>
 <span id="289">289</span>
-<span id="290">290</span>
-<span id="291">291</span>
-<span id="292">292</span>
-<span id="293">293</span>
-<span id="294">294</span>
 </pre><div class="example-wrap"><pre class="rust ">
 <span class="doccomment">//! Linux syscall implementations</span>
 <span class="doccomment">//!</span>
@@ -306,22 +301,15 @@
 <span class="doccomment">//!     syscall_entry: kernel_hal_unix::syscall_entry as usize,</span>
 <span class="doccomment">//!     #[cfg(not(feature = &quot;std&quot;))]</span>
 <span class="doccomment">//!     syscall_entry: 0,</span>
-<span class="doccomment">//!     spawn_fn: spawn,</span>
+<span class="doccomment">//!     thread_fn,</span>
 <span class="doccomment">//!     regs,</span>
-<span class="doccomment">//!     exit: false,</span>
 <span class="doccomment">//! };</span>
 <span class="doccomment">//! let ret = syscall.syscall(num, args).await;</span>
 <span class="doccomment">//! ```</span>
 <span class="doccomment">//!</span>
 
 <span class="attribute">#![<span class="ident">no_std</span>]</span>
-<span class="attribute">#![<span class="ident">deny</span>(
-    <span class="ident">warnings</span>,
-    <span class="ident">unsafe_code</span>,
-    <span class="ident">unused_must_use</span>,
-    <span class="ident">unreachable_patterns</span>,
-    <span class="ident">missing_docs</span>
-)]</span>
+<span class="attribute">#![<span class="ident">deny</span>(<span class="ident">warnings</span>, <span class="ident">unsafe_code</span>, <span class="ident">missing_docs</span>)]</span>
 <span class="attribute">#![<span class="ident">feature</span>(<span class="ident">bool_to_option</span>)]</span>
 
 <span class="attribute">#[<span class="ident">macro_use</span>]</span>
@@ -341,7 +329,9 @@
 
 <span class="kw">mod</span> <span class="ident">consts</span>;
 <span class="kw">mod</span> <span class="ident">file</span>;
+<span class="kw">mod</span> <span class="ident">ipc</span>;
 <span class="kw">mod</span> <span class="ident">misc</span>;
+<span class="kw">mod</span> <span class="ident">signal</span>;
 <span class="kw">mod</span> <span class="ident">task</span>;
 <span class="kw">mod</span> <span class="ident">time</span>;
 <span class="kw">mod</span> <span class="ident">vm</span>;
@@ -349,15 +339,13 @@
 <span class="doccomment">/// The struct of Syscall which stores the information about making a syscall</span>
 <span class="kw">pub</span> <span class="kw">struct</span> <span class="ident">Syscall</span><span class="op">&lt;</span><span class="lifetime">&#39;a</span><span class="op">&gt;</span> {
     <span class="doccomment">/// the thread making a syscall</span>
-    <span class="kw">pub</span> <span class="ident">thread</span>: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span> <span class="ident">Arc</span><span class="op">&lt;</span><span class="ident">Thread</span><span class="op">&gt;</span>,
+    <span class="kw">pub</span> <span class="ident">thread</span>: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span> <span class="ident">CurrentThread</span>,
     <span class="doccomment">/// the entry of current syscall</span>
     <span class="kw">pub</span> <span class="ident">syscall_entry</span>: <span class="ident">VirtAddr</span>,
     <span class="doccomment">/// store the regs statues</span>
     <span class="kw">pub</span> <span class="ident">regs</span>: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span> <span class="kw-2">mut</span> <span class="ident">GeneralRegs</span>,
-    <span class="doccomment">/// the spawn function in linux-loader</span>
-    <span class="kw">pub</span> <span class="ident">spawn_fn</span>: <span class="kw">fn</span>(<span class="ident">thread</span>: <span class="ident">Arc</span><span class="op">&lt;</span><span class="ident">Thread</span><span class="op">&gt;</span>),
-    <span class="doccomment">/// Set `true` to exit current task.</span>
-    <span class="kw">pub</span> <span class="ident">exit</span>: <span class="ident">bool</span>,
+    <span class="doccomment">/// new thread function</span>
+    <span class="kw">pub</span> <span class="ident">thread_fn</span>: <span class="ident">ThreadFn</span>,
 }
 
 <span class="kw">impl</span> <span class="ident">Syscall</span><span class="op">&lt;</span><span class="lifetime">&#39;_</span><span class="op">&gt;</span> {
@@ -373,7 +361,7 @@
         };
         <span class="kw">let</span> [<span class="ident">a0</span>, <span class="ident">a1</span>, <span class="ident">a2</span>, <span class="ident">a3</span>, <span class="ident">a4</span>, <span class="ident">a5</span>] <span class="op">=</span> <span class="ident">args</span>;
         <span class="kw">let</span> <span class="ident">ret</span> <span class="op">=</span> <span class="kw">match</span> <span class="ident">sys_type</span> {
-            <span class="ident">Sys</span>::<span class="ident">READ</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_read</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>),
+            <span class="ident">Sys</span>::<span class="ident">READ</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_read</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>).<span class="kw">await</span>,
             <span class="ident">Sys</span>::<span class="ident">WRITE</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_write</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>),
             <span class="ident">Sys</span>::<span class="ident">OPENAT</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_openat</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>, <span class="ident">a3</span>),
             <span class="ident">Sys</span>::<span class="ident">CLOSE</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_close</span>(<span class="ident">a0</span>.<span class="ident">into</span>()),
@@ -381,11 +369,11 @@
             <span class="ident">Sys</span>::<span class="ident">NEWFSTATAT</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_fstatat</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>),
             <span class="ident">Sys</span>::<span class="ident">LSEEK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_lseek</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span> <span class="kw">as</span> <span class="ident">i64</span>, <span class="ident">a2</span> <span class="kw">as</span> <span class="ident">u8</span>),
             <span class="ident">Sys</span>::<span class="ident">IOCTL</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_ioctl</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>, <span class="ident">a2</span>, <span class="ident">a3</span>, <span class="ident">a4</span>),
-            <span class="ident">Sys</span>::<span class="ident">PREAD64</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_pread</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>, <span class="ident">a3</span> <span class="kw">as</span> <span class="kw">_</span>),
+            <span class="ident">Sys</span>::<span class="ident">PREAD64</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_pread</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>, <span class="ident">a3</span> <span class="kw">as</span> <span class="kw">_</span>).<span class="kw">await</span>,
             <span class="ident">Sys</span>::<span class="ident">PWRITE64</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_pwrite</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>, <span class="ident">a3</span> <span class="kw">as</span> <span class="kw">_</span>),
-            <span class="ident">Sys</span>::<span class="ident">READV</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_readv</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>),
+            <span class="ident">Sys</span>::<span class="ident">READV</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_readv</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>).<span class="kw">await</span>,
             <span class="ident">Sys</span>::<span class="ident">WRITEV</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_writev</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>),
-            <span class="ident">Sys</span>::<span class="ident">SENDFILE</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_sendfile</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>),
+            <span class="ident">Sys</span>::<span class="ident">SENDFILE</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_sendfile</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>).<span class="kw">await</span>,
             <span class="ident">Sys</span>::<span class="ident">FCNTL</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_fcntl</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>, <span class="ident">a2</span>),
             <span class="ident">Sys</span>::<span class="ident">FLOCK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_flock</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>),
             <span class="ident">Sys</span>::<span class="ident">FSYNC</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_fsync</span>(<span class="ident">a0</span>.<span class="ident">into</span>()),
@@ -406,11 +394,13 @@
             <span class="ident">Sys</span>::<span class="ident">FCHOWN</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;fchown&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
             <span class="ident">Sys</span>::<span class="ident">FCHOWNAT</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;fchownat&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
             <span class="ident">Sys</span>::<span class="ident">FACCESSAT</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_faccessat</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>, <span class="ident">a3</span>),
+            <span class="ident">Sys</span>::<span class="ident">DUP</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_dup</span>(<span class="ident">a0</span>.<span class="ident">into</span>()),
             <span class="ident">Sys</span>::<span class="ident">DUP3</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_dup2</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>()), <span class="comment">// TODO: handle `flags`</span>
             <span class="ident">Sys</span>::<span class="ident">PIPE2</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_pipe</span>(<span class="ident">a0</span>.<span class="ident">into</span>()),           <span class="comment">// TODO: handle `flags`</span>
             <span class="ident">Sys</span>::<span class="ident">UTIMENSAT</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_utimensat</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>),
             <span class="ident">Sys</span>::<span class="ident">COPY_FILE_RANGE</span> <span class="op">=</span><span class="op">&gt;</span> {
                 <span class="self">self</span>.<span class="ident">sys_copy_file_range</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>.<span class="ident">into</span>(), <span class="ident">a4</span>, <span class="ident">a5</span>)
+                    .<span class="kw">await</span>
             }
 
             <span class="comment">// io multiplexing</span>
@@ -431,15 +421,16 @@
 
             <span class="comment">// memory</span>
             <span class="ident">Sys</span>::<span class="ident">BRK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;brk&quot;</span>, <span class="prelude-val">Err</span>(<span class="ident">LxError</span>::<span class="ident">ENOMEM</span>)),
-            <span class="ident">Sys</span>::<span class="ident">MMAP</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_mmap</span>(<span class="ident">a0</span>, <span class="ident">a1</span>, <span class="ident">a2</span>, <span class="ident">a3</span>, <span class="ident">a4</span>.<span class="ident">into</span>(), <span class="ident">a5</span> <span class="kw">as</span> <span class="kw">_</span>),
+            <span class="ident">Sys</span>::<span class="ident">MMAP</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_mmap</span>(<span class="ident">a0</span>, <span class="ident">a1</span>, <span class="ident">a2</span>, <span class="ident">a3</span>, <span class="ident">a4</span>.<span class="ident">into</span>(), <span class="ident">a5</span> <span class="kw">as</span> <span class="kw">_</span>).<span class="kw">await</span>,
             <span class="ident">Sys</span>::<span class="ident">MPROTECT</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_mprotect</span>(<span class="ident">a0</span>, <span class="ident">a1</span>, <span class="ident">a2</span>),
             <span class="ident">Sys</span>::<span class="ident">MUNMAP</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_munmap</span>(<span class="ident">a0</span>, <span class="ident">a1</span>),
             <span class="ident">Sys</span>::<span class="ident">MADVISE</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;madvise&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
 
             <span class="comment">// signal</span>
-            <span class="ident">Sys</span>::<span class="ident">RT_SIGACTION</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;sigaction&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
-            <span class="ident">Sys</span>::<span class="ident">RT_SIGPROCMASK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;sigprocmask&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
-            <span class="ident">Sys</span>::<span class="ident">SIGALTSTACK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;sigaltstack&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
+            <span class="ident">Sys</span>::<span class="ident">RT_SIGACTION</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_rt_sigaction</span>(<span class="ident">a0</span>, <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>),
+            <span class="ident">Sys</span>::<span class="ident">RT_SIGPROCMASK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_rt_sigprocmask</span>(<span class="ident">a0</span> <span class="kw">as</span> <span class="kw">_</span>, <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>.<span class="ident">into</span>(), <span class="ident">a3</span>),
+            <span class="comment">// Sys::RT_SIGRETURN =&gt; self.sys_rt_sigreturn(),</span>
+            <span class="ident">Sys</span>::<span class="ident">SIGALTSTACK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_sigaltstack</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>()),
             <span class="comment">//            Sys::KILL =&gt; self.sys_kill(a0, a1),</span>
 
             <span class="comment">// schedule</span>
@@ -480,12 +471,12 @@
             <span class="ident">Sys</span>::<span class="ident">CLOCK_GETTIME</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_clock_gettime</span>(<span class="ident">a0</span>, <span class="ident">a1</span>.<span class="ident">into</span>()),
 
             <span class="comment">// sem</span>
-            <span class="comment">//            #[cfg(not(target_arch = &quot;mips&quot;))]</span>
-            <span class="comment">//            Sys::SEMGET =&gt; self.sys_semget(a0, a1 as isize, a2),</span>
-            <span class="comment">//            #[cfg(not(target_arch = &quot;mips&quot;))]</span>
-            <span class="comment">//            Sys::SEMOP =&gt; self.sys_semop(a0, a1.into(), a2),</span>
-            <span class="comment">//            #[cfg(not(target_arch = &quot;mips&quot;))]</span>
-            <span class="comment">//            Sys::SEMCTL =&gt; self.sys_semctl(a0, a1, a2, a3 as isize),</span>
+            <span class="attribute">#[<span class="ident">cfg</span>(<span class="ident">not</span>(<span class="ident">target_arch</span> <span class="op">=</span> <span class="string">&quot;mips&quot;</span>))]</span>
+            <span class="ident">Sys</span>::<span class="ident">SEMGET</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_semget</span>(<span class="ident">a0</span>, <span class="ident">a1</span>, <span class="ident">a2</span>),
+            <span class="attribute">#[<span class="ident">cfg</span>(<span class="ident">not</span>(<span class="ident">target_arch</span> <span class="op">=</span> <span class="string">&quot;mips&quot;</span>))]</span>
+            <span class="ident">Sys</span>::<span class="ident">SEMOP</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_semop</span>(<span class="ident">a0</span>, <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>).<span class="kw">await</span>,
+            <span class="attribute">#[<span class="ident">cfg</span>(<span class="ident">not</span>(<span class="ident">target_arch</span> <span class="op">=</span> <span class="string">&quot;mips&quot;</span>))]</span>
+            <span class="ident">Sys</span>::<span class="ident">SEMCTL</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_semctl</span>(<span class="ident">a0</span>, <span class="ident">a1</span>, <span class="ident">a2</span>, <span class="ident">a3</span>),
 
             <span class="comment">// system</span>
             <span class="ident">Sys</span>::<span class="ident">GETPID</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_getpid</span>(),
@@ -552,8 +543,8 @@
             <span class="ident">Sys</span>::<span class="ident">LINK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_link</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>()),
             <span class="ident">Sys</span>::<span class="ident">UNLINK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_unlink</span>(<span class="ident">a0</span>.<span class="ident">into</span>()),
             <span class="ident">Sys</span>::<span class="ident">READLINK</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_readlink</span>(<span class="ident">a0</span>.<span class="ident">into</span>(), <span class="ident">a1</span>.<span class="ident">into</span>(), <span class="ident">a2</span>),
-            <span class="comment">//            Sys::CHMOD =&gt; self.unimplemented(&quot;chmod&quot;, Ok(0)),</span>
-            <span class="comment">//            Sys::CHOWN =&gt; self.unimplemented(&quot;chown&quot;, Ok(0)),</span>
+            <span class="ident">Sys</span>::<span class="ident">CHMOD</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;chmod&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
+            <span class="ident">Sys</span>::<span class="ident">CHOWN</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">unimplemented</span>(<span class="string">&quot;chown&quot;</span>, <span class="prelude-val">Ok</span>(<span class="number">0</span>)),
             <span class="ident">Sys</span>::<span class="ident">ARCH_PRCTL</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_arch_prctl</span>(<span class="ident">a0</span> <span class="kw">as</span> <span class="kw">_</span>, <span class="ident">a1</span>),
             <span class="ident">Sys</span>::<span class="ident">TIME</span> <span class="op">=</span><span class="op">&gt;</span> <span class="self">self</span>.<span class="ident">sys_time</span>(<span class="ident">a0</span>.<span class="ident">into</span>()),
             <span class="comment">//            Sys::EPOLL_CREATE =&gt; self.sys_epoll_create(a0),</span>
@@ -567,7 +558,6 @@
         <span class="macro">error</span><span class="macro">!</span>(<span class="string">&quot;unknown syscall: {:?}. exit...&quot;</span>, <span class="ident">sys_type</span>);
         <span class="kw">let</span> <span class="ident">proc</span> <span class="op">=</span> <span class="self">self</span>.<span class="ident">zircon_process</span>();
         <span class="ident">proc</span>.<span class="ident">exit</span>(<span class="op">-</span><span class="number">1</span>);
-        <span class="self">self</span>.<span class="ident">exit</span> <span class="op">=</span> <span class="bool-val">true</span>;
         <span class="prelude-val">Err</span>(<span class="ident">LxError</span>::<span class="ident">ENOSYS</span>)
     }
 
